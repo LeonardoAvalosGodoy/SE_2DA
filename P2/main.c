@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <freertos/FreeRTOS.h>
@@ -25,6 +24,7 @@ uint64_t time_aux = 0;
 uint64_t time_enemigos = 0;
 uint64_t time_movimiento_enemigos = 0;
 uint64_t time_movimiento_proyectil = 0;
+uint64_t time_dispara_enemigo = 0;
 
 int segundos = 0;
 int posicion_actual = 12;
@@ -33,6 +33,10 @@ int vidas = 3;
 int proyectil_x; //posicion de anchura
 int proyectil_y; //posicion de largo
 int proyectil_activo = 0;
+
+int proyectil_x_enemigo;
+int proyectil_y_enemigo;
+int proyectil_activo_enemigo = 0;
 
 int enemigo_x[5];
 int enemigo_y[5];
@@ -155,6 +159,8 @@ void juego(void *args){
                 if(enemigo_y[i] > 10){
                     enemigo_activo[i] = 0;
                 }
+            }
+        }
             for(int i = 0; i < 5; i++){
                 if(enemigo_activo[i] == 1 && enemigo_x[i] == posicion_actual && enemigo_y[i] == 10){
                     enemigo_activo[i] = 0;
@@ -163,11 +169,30 @@ void juego(void *args){
                     break;
                 }
             }
-            }
-        }
+ 
+    if(tiempo_actual - time_dispara_enemigo > 800){
+        time_dispara_enemigo = tiempo_actual;
+    
+    int enemigo_eligido = esp_random() % 5;
+    if(enemigo_activo[enemigo_eligido] == 1){
+        proyectil_x_enemigo = enemigo_x[enemigo_eligido];
+        proyectil_y_enemigo = enemigo_y[enemigo_eligido];
+        proyectil_activo_enemigo = 1;
+    }
     }
 
-    
+    if(proyectil_activo_enemigo == 1){
+        proyectil_y_enemigo++;
+
+        if(proyectil_y_enemigo > 10){
+            proyectil_activo_enemigo = 0;
+        }
+         if(proyectil_activo_enemigo == 1 && proyectil_x_enemigo == posicion_actual && proyectil_y_enemigo == 10){
+            proyectil_activo_enemigo = 0;
+            vidas--;
+            posicion_actual = 12;
+         }
+    }
   }
 }
 
@@ -210,6 +235,12 @@ void pantalla(void *args){
         //del mapa
         }else if(proyectil_activo == 1 && i == proyectil_y && j == proyectil_x){
             printf("|");
+        }else if(proyectil_activo_enemigo == 1 && i == proyectil_y_enemigo && j == proyectil_x_enemigo){
+            printf("|");
+
+        }else if(proyectil_activo == 1 && proyectil_activo_enemigo == 1 && proyectil_x == proyectil_x_enemigo 
+        && proyectil_y == proyectil_y_enemigo){
+            printf(" ");
         }else{
         int enemigo_mostrado = 0;
         for(int k = 0; k < 5; k++){
@@ -224,7 +255,7 @@ void pantalla(void *args){
         }
       }
       }
-
+12
       printf("|\n");
     }
     printf("+-------------------------+\n");
