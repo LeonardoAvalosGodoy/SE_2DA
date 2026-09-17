@@ -9,7 +9,7 @@
 
 
     int leds[] = {32,33,25,26,27};
-    int botones[] = {18,19,21};
+    int botones[] = {18,19,21,23};
 
     QueueHandle_t handlerQueue;
     QueueHandle_t entrada_cola;
@@ -17,7 +17,8 @@
     typedef enum{
     mov_izq,
     mov_der,
-    disparar
+    disparar,
+    detener_juego
     } mecanica;
 
     uint64_t time_aux = 0;
@@ -32,11 +33,11 @@
     int vidas = 3;
     int puntuacion = 0;
     int puntuacion_maxima = 0;
-    int juego_terminado = 0;
+    int estado_juego = 0;
 
-    int proyectil_x; //posicion de anchura
-    int proyectil_y; //posicion de largo
-    int proyectil_activo = 0;
+    int proyectil_x[5]; //posicion de anchura
+    int proyectil_y[5]; //posicion de largo
+    int proyectil_activo[5] ={0,0,0,0,0};
 
     int proyectil_x_enemigo;
     int proyectil_y_enemigo;
@@ -64,7 +65,7 @@
         gpio_set_direction(leds[i],GPIO_MODE_OUTPUT);
     }
 
-    for(int i = 0; i < 3; i++){
+    for(int i = 0; i < 4; i++){
         gpio_reset_pin(botones[i]);
         gpio_set_direction(botones[i],GPIO_MODE_INPUT);
         gpio_pulldown_en(botones[i]);
@@ -113,6 +114,11 @@
             xQueueSend(entrada_cola,&evento,portMAX_DELAY);
             break;
 
+            case 23:
+            evento = detener_juego;
+            xQueueSend(entrada_cola,&evento,portMAX_DELAY);
+            break;
+
             default:
             break;
         }
@@ -121,13 +127,12 @@
     }
 
 
-    void juego(void *args){
+void juego(void *args){
     mecanica evento;
     while(1){
 
-        // Detecta el momento en que las vidas llegan a 0 (solo una vez)
-        if(vidas == 0 && juego_terminado == 0){
-            juego_terminado = 1;
+        if(vidas <= 0 && estado_juego == 0){
+            estado_juego = 1;
             if(puntuacion > puntuacion_maxima){
                 puntuacion_maxima = puntuacion;
             }
@@ -135,27 +140,25 @@
 
         if(xQueueReceive(entrada_cola,&evento,150 / portTICK_PERIOD_MS)){
 
-            if(juego_terminado == 1){
-                // Mientras el juego terminó, SOLO el boton de disparo reinicia la partida
-                if(evento == disparar){
+            if(estado_juego != 0){
+                if(evento == detener_juego){
                     vidas = 3;
                     puntuacion = 0;
                     posicion_actual = 12;
+                    segundos = 0;
 
-                    proyectil_activo = 0;
                     proyectil_activo_enemigo = 0;
 
                     for(int i = 0; i < 5; i++){
                         enemigo_activo[i] = 0;
+                        proyectil_activo[i] = 0;
                     }
-                    juego_terminado = 0;
+                    estado_juego = 0;
                 }
-                // Izquierda/derecha no hacen nada mientras el juego esta terminado
                 continue;
             }
-
+             
             switch(evento){
-
                 case mov_izq:
                 if(posicion_actual > 0){
                     posicion_actual--;
@@ -169,33 +172,53 @@
                 break;
 
                 case disparar:
-                if(proyectil_activo == 0){
-                    proyectil_x = posicion_actual;
-                    proyectil_y = 10;
-                    proyectil_activo = 1;
+                for(int p = 0; p < 5; p++){
+                    if(proyectil_activo[p] == 0){
+                        proyectil_x[p] = posicion_actual;
+                        proyectil_y[p] = 10;
+                        proyectil_activo[p] = 1;
+                        break;
+                    }
                 }
                 break;
+
+                case detener_juego:
+                estado_juego = 2;
+                if(puntuacion > puntuacion_maxima){
+                    puntuacion_maxima = puntuacion;
+                }
+                continue;
             }
         }
 
-        // Si el juego esta terminado, no se ejecuta nada de la logica de abajo
-        // (movimiento de enemigos, colisiones, disparo enemigo, etc.)
-        if(juego_terminado == 1){
+        if(estado_juego != 0){
             continue;
         }
 
-        if(proyectil_activo == 1){
-            proyectil_y--;
+        for(int p = 0; p < 5; p++){
+            if(proyectil_activo[p] == 1){
+                proyectil_y[p]--;
+                
+                if(proyectil_y[p] < 0){
+                    proyectil_activo[p] = 0;
+                    continue;
+                }
 
-            if(proyectil_y < 0){
-                proyectil_activo = 0;
-            }
-            for(int i = 0; i < 5; i++){
-                if(enemigo_activo[i] == 1 && proyectil_x == enemigo_x[i] && proyectil_y == enemigo_y[i]){
-                    enemigo_activo[i] = 0;
-                    proyectil_activo = 0;
-                    puntuacion++;
-                    break;
+                for(int i = 0; i < 5; i++){
+                    if(enemigo_activo[i] == 1 && proyectil_x[p] == enemigo_x[i] && (proyectil_y[p] == enemigo_y[i] || proyectil_y[p] == enemigo_y[i] - 1)){
+                        enemigo_activo[i] = 0;
+                        proyectil_activo[p] = 0;
+                        puntuacion++;
+                        break;
+                    }
+                }
+                
+                // Colisión con el proyectil enemigo
+                if(proyectil_activo_enemigo == 1 && proyectil_x[p] == proyectil_x_enemigo){
+                    if(proyectil_y[p] == proyectil_y_enemigo || proyectil_y[p] == proyectil_y_enemigo - 1 || proyectil_y[p] == proyectil_y_enemigo + 1){
+                        proyectil_activo[p] = 0;
+                        proyectil_activo_enemigo = 0;
+                    }
                 }
             }
         }
@@ -230,14 +253,14 @@
             time_dispara_enemigo = tiempo_actual;
 
             int enemigo_eligido = esp_random() % 5;
-            if(enemigo_activo[enemigo_eligido] == 1){
+            if(enemigo_activo[enemigo_eligido] == 1 && proyectil_activo_enemigo == 0){
                 proyectil_x_enemigo = enemigo_x[enemigo_eligido];
                 proyectil_y_enemigo = enemigo_y[enemigo_eligido];
                 proyectil_activo_enemigo = 1;
             }
         }
 
-        if(proyectil_activo_enemigo == 1){
+        if(proyectil_activo_enemigo == 1 ){
             proyectil_y_enemigo++;
 
             if(proyectil_y_enemigo > 10){
@@ -261,7 +284,7 @@
                 time_enemigos = time_actual;
 
                 // No genera enemigos nuevos si el juego ya termino
-                if(juego_terminado == 0){
+                if(estado_juego == 0){
                     for(int i = 0; i < 5; i++){
                         if(enemigo_activo[i] == 0){
                             enemigo_x[i] = esp_random() % 25;
@@ -278,14 +301,19 @@
 
     void pantalla(void *args){
     while(1){
-        if(vidas == 0){
+        if(estado_juego != 0){
             printf("\033[2J\033[1;1H"); 
             printf("=============================\n");
             printf("        SPACE DEFENDER       \n");
             printf("=============================\n");
-            printf("SUERTE EN LA PROXIMA!!\n");
+
+            if(estado_juego == 1){
+                printf("SUERTE EN LA PROXIMA\n");
+            }else if(estado_juego == 2){
+                printf("HASTA LUEGO\n");
+            }
             printf("Puntuacion:%d   Puntuacion maxima: %d\n",puntuacion,puntuacion_maxima);
-            printf("(Presiona el boton de disparo para reiniciar)\n");
+            printf("(Presiona el cuarto boton para reiniciar)\n");
             printf("Segundos: %d",segundos);
             leds_bin(segundos);
 
@@ -299,39 +327,53 @@
         printf("=============================\n");
 
         printf("Puntuacion:%d   Vidas: %d\n",puntuacion,vidas);
-        printf("Segundos: %d ",segundos);
+        printf("Segundos: %d \n",segundos);
         leds_bin(segundos);
 
         printf("+-------------------------+\n");
         for(int i = 0; i < 11; i++){    //Largo
         printf("|");
         for(int j = 0; j < 25; j++){  //Ancho
+            
+            // 1. Dibuja al jugador
             if(i == 10 && j == posicion_actual){
-            printf("^");
-            //este else if signfica 
-            //si se esta mandando un proyectil,debe de coincidir con las coordenas
-            //del mapa
-            }else if(proyectil_activo == 1 && i == proyectil_y && j == proyectil_x){
-                printf("|");
-            }else if(proyectil_activo_enemigo == 1 && i == proyectil_y_enemigo && j == proyectil_x_enemigo){
-                printf("|");
-
-            }else if(proyectil_activo == 1 && proyectil_activo_enemigo == 1 && proyectil_x == proyectil_x_enemigo 
-            && proyectil_y == proyectil_y_enemigo){
-                printf(" ");
+                printf("^");
             }else{
-            int enemigo_mostrado = 0;
-            for(int k = 0; k < 5; k++){
-                if(enemigo_activo[k] == 1 && i == enemigo_y[k] && j == enemigo_x[k]){
-                    printf("*");
-                    enemigo_mostrado = 1;
-                    break;
+                // 2. Revisa si hay ALGUNO de los 5 proyectiles del jugador en esta coordenada
+                int hay_proyectil_jugador = 0;
+                for(int p = 0; p < 5; p++){
+                    if(proyectil_activo[p] == 1 && i == proyectil_y[p] && j == proyectil_x[p]){
+                        hay_proyectil_jugador = 1;
+                        break;
+                    }
+                }
+
+                // 3. Revisa si hay un proyectil enemigo en esta coordenada
+                int hay_proyectil_enemigo = 0;
+                if(proyectil_activo_enemigo == 1 && i == proyectil_y_enemigo && j == proyectil_x_enemigo){
+                    hay_proyectil_enemigo = 1;
+                }
+
+                // 4. Decide qué imprimir basándose en lo que encontró
+                if(hay_proyectil_jugador == 1 && hay_proyectil_enemigo == 1){
+                    printf(" "); // Si chocan, desaparecen visualmente
+                }else if(hay_proyectil_jugador == 1 || hay_proyectil_enemigo == 1){
+                    printf("|"); // Dibuja cualquier proyectil solitario
+                }else{
+                    // 5. Si no hay proyectiles, dibuja enemigos o espacio vacío
+                    int enemigo_mostrado = 0;
+                    for(int k = 0; k < 5; k++){
+                        if(enemigo_activo[k] == 1 && i == enemigo_y[k] && j == enemigo_x[k]){
+                            printf("*");
+                            enemigo_mostrado = 1;
+                            break;
+                        }
+                    }
+                    if(enemigo_mostrado == 0){
+                        printf(" ");
+                    }
                 }
             }
-            if(enemigo_mostrado == 0){
-                printf(" ");
-            }
-        }
         }
         printf("|\n");
         }
