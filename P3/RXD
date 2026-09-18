@@ -1,0 +1,582 @@
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "string.h"
+
+#define BUF_SIZE0 (1024)
+#define BUF_SIZE2 (1024)
+
+#define SF '#'
+#define EF '$'
+#define ACK 0x06
+#define NACK 0x15
+
+QueueHandle_t cola_pancartas;
+
+
+// font [caracter] [fila][columna]
+static const char font[][5][6] = {
+// MAYUSCULAS
+    // A(0)
+    {" *** ",
+     "*   *",
+     "*****",
+     "*   *",
+     "*   *"},
+    // B(1)
+    {"**** ",
+     "*   *",
+     "**** ",
+     "*   *",
+     "**** "},
+    // C(2)
+    {" ****",
+     "*    ",
+     "*    ",
+     "*    ",
+     " ****"},
+    // D(3)
+    {"**** ",
+     "*   *",
+     "*   *",
+     "*   *",
+     "**** "},
+    // E(4)
+    {"*****",
+     "*    ",
+     "***  ",
+     "*    ",
+     "*****"},
+    // F(5)
+    {"*****",
+     "*    ",
+     "***  ",
+     "*    ",
+     "*    "},
+    // G(6)
+    {" ****",
+     "*    ",
+     "*  **",
+     "*   *",
+     " ****"},
+    // H(7)
+    {"*   *",
+     "*   *",
+     "*****",
+     "*   *",
+     "*   *"},
+    // I(8)
+    {" *** ",
+     "  *  ",
+     "  *  ",
+     "  *  ",
+     " *** "},
+    // J(9)
+    {"  ***",
+     "    *",
+     "    *",
+     "*   *",
+     " *** "},
+    // K(10)
+    {"*   *",
+     "*  * ",
+     "***  ",
+     "*  * ",
+     "*   *"},
+    // L(11)
+    {"*    ",
+     "*    ",
+     "*    ",
+     "*    ",
+     "*****"},
+    // M(12)
+    {"*   *",
+     "** **",
+     "* * *",
+     "*   *",
+     "*   *"},
+    // N(13)
+    {"*   *",
+     "**  *",
+     "* * *",
+     "*  **",
+     "*   *"},
+    // O(14)
+    {" *** ",
+     "*   *",
+     "*   *",
+     "*   *",
+     " *** "},
+    // P(15)
+    {"**** ",
+     "*   *",
+     "**** ",
+     "*    ",
+     "*    "},
+    // Q(16)
+    {" *** ",
+     "*   *",
+     "*   *",
+     "*  **",
+     " ****"},
+    // R(17)
+    {"**** ",
+     "*   *",
+     "**** ",
+     "*  * ",
+     "*   *"},
+    // S(18)
+    {" ****",
+     "*    ",
+     " *** ",
+     "    *",
+     "**** "},
+    // T(19)
+    {"*****",
+     "  *  ",
+     "  *  ",
+     "  *  ",
+     "  *  "},
+    // U(20)
+    {"*   *",
+     "*   *",
+     "*   *",
+     "*   *",
+     " *** "},
+    // V(21)
+    {"*   *",
+     "*   *",
+     "*   *",
+     " * * ",
+     "  *  "},
+    // W(22)
+    {"*   *",
+     "*   *",
+     "* * *",
+     "** **",
+     "*   *"},
+    // X(23)
+    {"*   *",
+     " * * ",
+     "  *  ",
+     " * * ",
+     "*   *"},
+    // Y(24)
+    {"*   *",
+     " * * ",
+     "  *  ",
+     "  *  ",
+     "  *  "},
+    // Z(25)
+    {"*****",
+     "   * ",
+     "  *  ",
+     " *   ",
+     "*****"},
+
+    // MINISCULAS
+
+    // a(26)
+    {"     ",
+     " *** ",
+     "*  * ",
+     "* ** ",
+     " ** *"},
+    // b(27)
+    {"*    ",
+     "*    ",
+     "**** ",
+     "*   *",
+     "**** "},
+    // c(28)
+    {"     ",
+     " *** ",
+     "*    ",
+     "*    ",
+     " *** "},
+    // d(29)
+    {"    *",
+     "    *",
+     " ****",
+     "*   *",
+     " ****"},
+    // e(30)
+    {"     ",
+     " *** ",
+     "*****",
+     "*    ",
+     " *** "},
+    // f(31)
+    {"  ** ",
+     " *   ",
+     "***  ",
+     " *   ",
+     " *   "},
+    // g(32)
+    {"     ",
+     " ****",
+     "*   *",
+     " ****",
+     " *** "},
+    // h(33)
+    {"*    ",
+     "*    ",
+     "**** ",
+     "*   *",
+     "*   *"},
+    // i(34)
+    {"  *  ",
+     "     ",
+     " **  ",
+     "  *  ",
+     " *** "},
+    // j(35)
+    {"   * ",
+     "     ",
+     "   * ",
+     "   * ",
+     " **  "},
+    // k(36)
+    {"*    ",
+     "*  * ",
+     "***  ",
+     "*  * ",
+     "*   *"},
+    // l(37)
+    {" **  ",
+     "  *  ",
+     "  *  ",
+     "  *  ",
+     " *** "},
+    // m(38)
+    {"     ",
+     "** * ",
+     "* * *",
+     "*   *",
+     "*   *"},
+    // n(39)
+    {"     ",
+     "**** ",
+     "*   *",
+     "*   *",
+     "*   *"},
+    // o(40)
+    {"     ",
+     " *** ",
+     "*   *",
+     "*   *",
+     " *** "},
+    // p(41)
+    {"     ",
+     "**** ",
+     "*   *",
+     "**** ",
+     "*    "},
+    // q(42)
+    {"     ",
+     " ****",
+     "*   *",
+     " ****",
+     "    *"},
+    // r(43)
+    {"     ",
+     " *** ",
+     "*    ",
+     "*    ",
+     "*    "},
+    // s(44)
+    {"     ",
+     " *** ",
+     " **  ",
+     "  ** ",
+     " *** "},
+    // t(45)
+    {" *   ",
+     "***  ",
+     " *   ",
+     " *   ",
+     "  ** "},
+    // u(46)
+    {"     ",
+     "*   *",
+     "*   *",
+     "*   *",
+     " ****"},
+    // v(47)
+    {"     ",
+     "*   *",
+     "*   *",
+     " * * ",
+     "  *  "},
+    // w(48)
+    {"     ",
+     "*   *",
+     "* * *",
+     "* * *",
+     " * * "},
+    // x(49)
+    {"     ",
+     "*   *",
+     " * * ",
+     " * * ",
+     "*   *"},
+    // y(50)
+    {"     ",
+     "*   *",
+     "*   *",
+     " ****",
+     "    *"},
+    // z(51)
+    {"     ",
+     "*****",
+     "  *  ",
+     " *   ",
+     "*****"},
+
+    //NUMEROS
+
+    // 0(52)
+    {" *** ",
+     "*  **",
+     "* * *",
+     "**  *",
+     " *** "},
+    // 1(53)
+    {"  *  ",
+     " **  ",
+     "  *  ",
+     "  *  ",
+     " *** "},
+    // 2(54)
+    {" *** ",
+     "*   *",
+     "  ** ",
+     " *   ",
+     "*****"},
+    // 3(55)
+    {" *** ",
+     "    *",
+     "  ** ",
+     "    *",
+     " *** "},
+    // 4(56)
+    {"*  * ",
+     "*  * ",
+     "*****",
+     "   * ",
+     "   * "},
+    // 5(57)
+    {"*****",
+     "*    ",
+     "**** ",
+     "    *",
+     "**** "},
+    // 6(58)
+    {" *** ",
+     "*    ",
+     "**** ",
+     "*   *",
+     " *** "},
+    // 7(59)
+    {"*****",
+     "    *",
+     "   * ",
+     "  *  ",
+     "  *  "},
+    // 8(60)
+    {" *** ",
+     "*   *",
+     " *** ",
+     "*   *",
+     " *** "},
+    // 9(61)
+    {" *** ",
+     "*   *",
+     " ****",
+     "    *",
+     " *** "},
+
+    //CARACTERES ESPECIALES
+
+    // ESpacio (62)
+    {"     ",
+     "     ",
+     "     ",
+     "     ",
+     "     "},
+    // !(63)
+    {"  *  ",
+     "  *  ",
+     "  *  ",
+     "     ",
+     "  *  "},
+    // .(64)
+    {"     ",
+     "     ",
+     "     ",
+     "     ",
+     "  *  "},
+    // +(65)
+    {"     ",
+     "  *  ",
+     "*****",
+     "  *  ",
+     "     "},
+    // -(66)
+    {"     ",
+     "     ",
+     "*****",
+     "     ",
+     "     "},
+};
+
+/ Retorna el indice en font[] para el caracter dado, o -1 si no es válido.
+int id_caracter(char c){
+    if(c >= 'A' && c <= 'Z') {
+        return c - 'A';
+    }
+    if(c >= 'a' && c <= 'z') {
+        return 26 + (c - 'a');
+    }
+    if(c >= '0' && c <= '9') {
+        return 52 + (c - '0');
+    }
+    if(c == ' ') {
+        return 62;
+    }
+    if(c == '!') {
+        return 63;
+    }
+    if(c == '.') {
+        return 64;
+    }
+    if(c == '+') {
+        return 65;
+    }
+    if(c == '-') {
+        return 66;
+    }
+    return -1;
+}
+void uart_putchar(uart_port_t uart_num, char c){
+    uart_write_bytes(uart_num, &c, 1);
+}
+
+void uart_puts(uart_port_t uart_num, char *str){
+    uart_write_bytes(uart_num, str, strlen(str));
+}
+
+void imprimir_pancarta(uart_port_t uart_num, const char *str){
+    int len = strlen(str);
+    uart_puts(uart_num, "\r\n");
+    for(int fila = 0; fila < 5; fila++){
+        for(int i = 0; i < len; i++){
+            int idx = id_caracter(str[i]);
+            if(idx >= 0){
+                uart_puts(uart_num, (char *)font[idx][fila]);
+                uart_putchar(uart_num, ' ');
+            }
+        }
+        uart_puts(uart_num, "\r\n");
+    }
+    uart_puts(uart_num, "\r\n");
+}
+
+void init_uarts(void){
+    uart_config_t cfg = {
+        .baud_rate = 115200, .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE, .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE, .source_clk = UART_SCLK_DEFAULT,
+    };
+    
+    // UART0 para Monitor Serie
+    uart_driver_install(UART_NUM_0, BUF_SIZE0 * 2, 0, 0, NULL, 0);
+    uart_param_config(UART_NUM_0, &cfg);
+    uart_set_pin(UART_NUM_0, 1, 3, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+
+    // UART2 para recibir del ESP32 1
+    uart_driver_install(UART_NUM_2, BUF_SIZE2 * 2, 0, 0, NULL, 0);
+    uart_param_config(UART_NUM_2, &cfg);
+    uart_set_pin(UART_NUM_2, 17, 16, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+}
+
+// Tarea 1: Recibe trama, verifica checksum y manda ACK/NACK
+void tarea_recepcion_trama(void *arg){
+    char buffer_msg[26];
+    int idx = 0;
+    uint8_t checksum_calc = 0;
+    
+    typedef enum { ESPERANDO_SF, LEYENDO_MENSAJE, LEYENDO_CHECKSUM } estado_t;
+    estado_t estado = ESPERANDO_SF;
+
+    while(1){
+        uint8_t c;
+        int len = uart_read_bytes(UART_NUM_2, &c, 1, portMAX_DELAY);
+        
+        if(len > 0){
+            switch(estado){
+                case ESPERANDO_SF:
+                    if(c == SF){
+                        idx = 0;
+                        checksum_calc = 0;
+                        memset(buffer_msg, 0, sizeof(buffer_msg));
+                        estado = LEYENDO_MENSAJE;
+                    }
+                    break;
+                    
+                case LEYENDO_MENSAJE:
+                    if(c == EF){
+                        buffer_msg[idx] = '\0';
+                        estado = LEYENDO_CHECKSUM;
+                    } else {
+                        if(idx < 25){
+                            buffer_msg[idx++] = (char)c;
+                            checksum_calc ^= c; // Cálculo de XOR en tiempo real
+                        } else {
+                            // Trama muy larga (formato incorrecto)
+                            uint8_t nack = NACK;
+                            uart_write_bytes(UART_NUM_2, &nack, 1);
+                            estado = ESPERANDO_SF;
+                        }
+                    }
+                    break;
+                    
+                case LEYENDO_CHECKSUM:
+                    if(c == checksum_calc){
+                        // Checksum correcto
+                        uint8_t ack = ACK;
+                        uart_write_bytes(UART_NUM_2, &ack, 1);
+                        xQueueSend(cola_pancartas, buffer_msg, portMAX_DELAY);
+                    } else {
+                        // Checksum incorrecto
+                        uint8_t nack = NACK;
+                        uart_write_bytes(UART_NUM_2, &nack, 1);
+                    }
+                    estado = ESPERANDO_SF;
+                    break;
+            }
+        }
+    }
+}
+
+// Tarea 2: Imprime la pancarta si el checksum fue correcto
+void tarea_transmision_pancarta(void *arg){
+    char mensaje[26];
+    while(1){
+        if(xQueueReceive(cola_pancartas, mensaje, portMAX_DELAY)){
+            imprimir_pancarta(UART_NUM_0, mensaje);
+        }
+    }
+}
+
+void app_main(void){
+    init_uarts();
+    cola_pancartas = xQueueCreate(5, sizeof(char) * 26);
+    
+    xTaskCreate(tarea_recepcion_trama, "rx_trama", 4096, NULL, 5, NULL);
+    xTaskCreate(tarea_transmision_pancarta, "tx_pancarta", 4096, NULL, 5, NULL);
+}
