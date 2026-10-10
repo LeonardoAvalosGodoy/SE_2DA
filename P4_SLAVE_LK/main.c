@@ -1,3 +1,4 @@
+
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -38,6 +39,13 @@ static uint16_t T1;
 static int16_t T2;
 static int16_t T3;
 
+/* ESTRUCTURA PARA GUARDAR UNA SOLICITUD */
+typedef struct {
+    uint8_t header;
+    uint8_t cmd;
+} solicitud_t;
+
+/* CONFIGURACIÓN UART */
 void init_uart(void){
     uart_config_t uart_config = {
         .baud_rate = UART_BAUD_RATE,
@@ -53,21 +61,23 @@ void init_uart(void){
     ESP_ERROR_CHECK(uart_set_pin(UART_PORT, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 }
 
+/* ESCRIBIR POR UART */
 void puts_uart(uart_port_t uart_num, const char *str){
     uart_write_bytes(uart_num, str, strlen(str));
 }
 
+
 void float_to_str(float val, char *buf){
-    int entero = (int)val;
-    int decimal = (int)((val - entero) * 100);
     int i = 0;
+    bool negativo = (val < 0.0f);
 
-    if(decimal < 0) decimal = -decimal;
+    if(negativo) val = -val;
 
-    if(entero < 0){
-        buf[i++] = '-';
-        entero = -entero;
-    }
+    int total = (int)(val * 100.0f + 0.5f);
+    int entero = total / 100;
+    int decimal = total % 100;
+
+    if(negativo && total != 0) buf[i++] = '-';
 
     if(entero == 0){
         buf[i++] = '0';
@@ -75,7 +85,7 @@ void float_to_str(float val, char *buf){
         char tmp[8];
         int t = 0;
 
-        while(entero > 0){
+        while(entero > 0 && t < (int)sizeof(tmp)){
             tmp[t++] = '0' + (entero % 10);
             entero /= 10;
         }
@@ -89,12 +99,25 @@ void float_to_str(float val, char *buf){
     buf[i] = '\0';
 }
 
-static bool IRAM_ATTR on_recv(i2c_slave_dev_handle_t handle, const i2c_slave_rx_done_event_data_t *edata, void *arg){
+/* EVENTO DE RECEPCIÓN I2C */
+static bool IRAM_ATTR on_recv(i2c_slave_dev_handle_t handle,
+                              const i2c_slave_rx_done_event_data_t *edata,
+                              void *arg){
     BaseType_t woken = pdFALSE;
-    xQueueSendFromISR((QueueHandle_t)arg, edata, &woken);
+    solicitud_t solicitud = {0};
+
+    // Copia los bytes y no solamente el puntero al buffer.
+    if(edata != NULL && edata->buffer != NULL){
+        solicitud.header = edata->buffer[0];
+        solicitud.cmd = edata->buffer[1];
+    }
+
+    // Envía una copia de la solicitud a la tarea.
+    xQueueSendFromISR((QueueHandle_t)arg, &solicitud, &woken);
     return woken == pdTRUE;
 }
 
+/* INICIALIZACIÓN DEL BMP280 */
 static void bmp280_init(void){
     i2c_master_bus_config_t bus_cfg = {
         .i2c_port = I2C_NUM_0,
@@ -115,6 +138,7 @@ static void bmp280_init(void){
 
     ESP_ERROR_CHECK(i2c_master_bus_add_device(bmp_bus, &dev_cfg, &bmp_sensor));
 
+    // Obtiene los valores de calibración de temperatura.
     uint8_t reg = 0x88;
     uint8_t cal[6];
 
@@ -124,17 +148,21 @@ static void bmp280_init(void){
     T2 = (int16_t)(((uint16_t)cal[3] << 8) | cal[2]);
     T3 = (int16_t)(((uint16_t)cal[5] << 8) | cal[4]);
 
+    // Configura el BMP280 para realizar mediciones.
     uint8_t cmd[2] = {0xF4, 0x27};
     ESP_ERROR_CHECK(i2c_master_transmit(bmp_sensor, cmd, sizeof(cmd), 1000));
 
     puts_uart(UART_PORT, "\r\nBMP280 OK\r\n");
 }
 
+/* LEER TEMPERATURA DEL BMP280 */
 static float bmp280_read(void){
     uint8_t reg = 0xFA;
     uint8_t raw[3];
 
-    if(i2c_master_transmit_receive(bmp_sensor, &reg, 1, raw, 3, 1000) != ESP_OK) return -999.0f;
+    if(i2c_master_transmit_receive(bmp_sensor, &reg, 1, raw, 3, 1000) != ESP_OK){
+        return -999.0f;
+    }
 
     int32_t adc = ((int32_t)raw[0] << 12) | ((int32_t)raw[1] << 4) | (raw[2] >> 4);
     int32_t v1 = ((((adc >> 3) - ((int32_t)T1 << 1)) * (int32_t)T2) >> 11);
@@ -143,13 +171,21 @@ static float bmp280_read(void){
     return (float)(((v1 + v2) * 5 + 128) >> 8) / 100.0f;
 }
 
+/* PREPARAR LA SIGUIENTE RECEPCIÓN */
+static void preparar_recepcion(void){
+    // Evita conservar el encabezado y comando anteriores.
+    memset(rx_buf, 0, sizeof(rx_buf));
+    ESP_ERROR_CHECK(i2c_slave_receive(slave_handle, rx_buf, sizeof(rx_buf)));
+}
+
+/* INICIALIZACIÓN I2C SLAVE */
 static void init_i2c_slave(void){
     i2c_slave_config_t cfg = {
         .i2c_port = I2C_NUM_1,
         .sda_io_num = SLAVE_SDA,
         .scl_io_num = SLAVE_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .send_buf_depth = 256,
+        .send_buf_depth = 512,
         .slave_addr = SLAVE_ADDR,
         .addr_bit_len = I2C_ADDR_BIT_LEN_7,
     };
@@ -164,51 +200,66 @@ static void init_i2c_slave(void){
     };
 
     ESP_ERROR_CHECK(i2c_slave_register_event_callbacks(slave_handle, &callbacks, rx_queue));
-    ESP_ERROR_CHECK(i2c_slave_receive(slave_handle, rx_buf, sizeof(rx_buf)));
+    preparar_recepcion();
 }
 
+/* TAREA QUE RECIBE SOLICITUDES Y RESPONDE */
 static void tarea_slave(void *arg){
-    i2c_slave_rx_done_event_data_t evento;
+    solicitud_t solicitud;
     char temp_str[16];
 
     puts_uart(UART_PORT, "\r\nSlave listo\r\n");
 
     while(1){
-        xQueueReceive(rx_queue, &evento, portMAX_DELAY);
+        if(xQueueReceive(rx_queue, &solicitud, portMAX_DELAY) == pdTRUE){
 
-        if(evento.buffer[0] == HEADER_REQ && evento.buffer[1] == CMD){
-            float temperatura = bmp280_read();
+            // Solo procesa las solicitudes que coinciden.
+            if(solicitud.header == HEADER_REQ && solicitud.cmd == CMD){
+                float temperatura = bmp280_read();
 
-            if(temperatura != -999.0f){
-                float_to_str(temperatura, temp_str);
+                if(temperatura != -999.0f){
+                    // Prepara la respuesta con la temperatura.
+                    uint8_t tx[6] = {HEADER_RESP, CMD, 0, 0, 0, 0};
+                    memcpy(&tx[2], &temperatura, sizeof(float));
 
-                puts_uart(UART_PORT, "\r\n(SLAVE) Temperatura: ");
-                puts_uart(UART_PORT, temp_str);
-                puts_uart(UART_PORT, " C\r\n");
+                    // Coloca la respuesta para que el master la lea.
+                    esp_err_t err = i2c_slave_transmit(slave_handle, tx, sizeof(tx), 200);
 
-                uint8_t tx[6] = {HEADER_RESP, CMD, 0, 0, 0, 0};
-                memcpy(&tx[2], &temperatura, sizeof(float));
+                    if(err != ESP_OK){
+                        puts_uart(UART_PORT, "\r\nError al preparar respuesta I2C\r\n");
 
-                esp_err_t err = i2c_slave_transmit(slave_handle, tx, sizeof(tx), 500);
+                        // Reinicia el dispositivo si falló la transmisión.
+                        ESP_ERROR_CHECK(i2c_del_slave_device(slave_handle));
+                        slave_handle = NULL;
+                        xQueueReset(rx_queue);
 
-                if(err != ESP_OK){
-                    i2c_del_slave_device(slave_handle);
-                    vTaskDelay(pdMS_TO_TICKS(10));
-                    init_i2c_slave();
-                    continue;
+                        vTaskDelay(pdMS_TO_TICKS(10));
+                        init_i2c_slave();
+                        continue;
+                    }
+
+                    // Muestra una medición por solicitud válida.
+                    float_to_str(temperatura, temp_str);
+                    puts_uart(UART_PORT, "\r\n(SLAVE) Temperatura: ");
+                    puts_uart(UART_PORT, temp_str);
+                    puts_uart(UART_PORT, " C\r\n");
                 }
             }
-        }
 
-        i2c_slave_receive(slave_handle, rx_buf, sizeof(rx_buf));
+            // Prepara la siguiente recepción, sea válida o no.
+            preparar_recepcion();
+        }
     }
 }
 
+/* FUNCIÓN PRINCIPAL */
 void app_main(void){
     init_uart();
     bmp280_init();
 
-    rx_queue = xQueueCreate(4, sizeof(i2c_slave_rx_done_event_data_t));
+    // La cola guarda copias de las solicitudes.
+    rx_queue = xQueueCreate(4, sizeof(solicitud_t));
+    configASSERT(rx_queue != NULL);
 
     init_i2c_slave();
 
